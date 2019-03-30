@@ -1,0 +1,82 @@
+
+
+--同盾预处理表;
+drop table if exists hive.risk_data.t_dz_credit_detail;
+create table if not exists hive.risk_data.t_dz_credit_detail as 
+select idcard_num,phone_num,rule_name,rule_result,is_expire,create_time,substr(rule_detail,2,length(rule_detail)-2) as rule_detail 
+from dev01.credit.t_ctc_black_td_rule_detail
+where is_expire='N' and out_biz_id like '20190327R%'
+and rule_name in ('7天内申请人在多个平台申请借款','1个月内申请人在多个平台申请借款','3个月内申请人在多个平台申请借款');
+
+
+--3个月同盾多头;
+drop table if exists hive.risk_data.t_dz_credit_td_3m;
+create table if not exists hive.risk_data.t_dz_credit_td_3m as 
+select * 
+from 
+(select idcard_num,phone_num,cast(rule_result as double) as rule_result,create_time,rule_name,cast(json_extract(cast(platform_detail as json),'$.count') as integer) as platform_detail_cnt,
+cast(json_extract(cast(platform_detail as json),'$.industry_display_name') as varchar(20)) as industry_display_name from 
+(select idcard_num,rule_name,create_time,phone_num,rule_result,
+cast(json_extract(rule_detail,'$.platform_detail') as Array(json)) as platform_detail_array
+from hive.risk_data.t_dz_credit_detail where rule_name='3个月内申请人在多个平台申请借款') tmp
+CROSS JOIN UNNEST(platform_detail_array) AS t (platform_detail)
+);
+
+
+--1个月同盾多头;
+drop table if exists hive.risk_data.t_dz_credit_td_1m;
+create table if not exists hive.risk_data.t_dz_credit_td_1m as 
+select * 
+from 
+(select idcard_num,phone_num,cast(rule_result as double) as rule_result,create_time,rule_name,cast(json_extract(cast(platform_detail as json),'$.count') as integer) as platform_detail_cnt,
+cast(json_extract(cast(platform_detail as json),'$.industry_display_name') as varchar(20)) as industry_display_name from 
+(select idcard_num,rule_name,create_time,phone_num,rule_result,
+cast(json_extract(rule_detail,'$.platform_detail') as Array(json)) as platform_detail_array
+from hive.risk_data.t_dz_credit_detail where rule_name='1个月内申请人在多个平台申请借款') tmp
+CROSS JOIN UNNEST(platform_detail_array) AS t (platform_detail)
+);
+
+
+--7天同盾多头;
+drop table if exists hive.risk_data.t_dz_credit_td_7d;
+create table if not exists hive.risk_data.t_dz_credit_td_7d as 
+select * 
+from 
+(select idcard_num,phone_num,cast(rule_result as double) as rule_result,create_time,rule_name,cast(json_extract(cast(platform_detail as json),'$.count') as integer) as platform_detail_cnt,
+cast(json_extract(cast(platform_detail as json),'$.industry_display_name') as varchar(20)) as industry_display_name from 
+(select idcard_num,rule_name,create_time,phone_num,rule_result,
+cast(json_extract(rule_detail,'$.platform_detail') as Array(json)) as platform_detail_array
+from hive.risk_data.t_dz_credit_detail where rule_name='7天内申请人在多个平台申请借款') tmp
+CROSS JOIN UNNEST(platform_detail_array) AS t (platform_detail)
+);
+
+
+--同盾汇总数据;
+drop table if exists hive.risk_data.t_dz_credit_td_total;
+create table hive.risk_data.t_dz_credit_td_total as  
+select * 
+from 
+(select * from hive.risk_data.t_dz_credit_td_3m)
+union all
+(select * from hive.risk_data.t_dz_credit_td_1m)
+union all
+(select * from hive.risk_data.t_dz_credit_td_7d)
+order by idcard_num,phone_num,rule_name,create_time desc;
+
+
+--同盾最终表;
+drop table if exists hive.risk_data.t_dz_credit_td_detail_final;
+create table hive.risk_data.t_dz_credit_td_detail_final as 
+select idcard_num,phone_num,
+min(create_time) as create_time,
+max(if(rule_name = '3个月内申请人在多个平台申请借款' ,rule_result, 0)) as t_dz_credit_td_3m_total_DZ,
+max(if(rule_name = '1个月内申请人在多个平台申请借款' ,rule_result, 0)) as t_dz_credit_td_1m_total_DZ,
+max(if(rule_name = '7天内申请人在多个平台申请借款' ,rule_result, 0)) as t_dz_credit_td_7d_total_DZ,
+max(if(rule_name = '3个月内申请人在多个平台申请借款' and industry_display_name = '小额贷款公司', platform_detail_cnt, 0)) as td_3m_small_credit_company_DZ,
+max(if(rule_name = '1个月内申请人在多个平台申请借款' and industry_display_name = '小额贷款公司', platform_detail_cnt, 0)) as td_1m_small_credit_company_DZ,
+max(if(rule_name = '7天内申请人在多个平台申请借款' and industry_display_name = '小额贷款公司', platform_detail_cnt, 0)) as td_7d_small_credit_company_DZ
+from hive.risk_data.t_dz_credit_td_total
+group by idcard_num,phone_num
+;
+
+select * from hive.risk_data.t_dz_credit_td_detail_final
